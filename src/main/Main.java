@@ -1,8 +1,10 @@
 package main;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Scanner;
+import java.util.stream.Collectors;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -12,9 +14,9 @@ import data.Ballot;
 import data.ElGamalTuple;
 import data.Election;
 import data.MixerResult;
-import data.ParallelMixerResult;
-import data.ParallelProofOfShuffle;
+import data.ProofOfShuffle;
 import tools.FileManipulator;
+import tools.GitManipulator;
 import tools.Printer;
 
 public class Main {
@@ -22,7 +24,6 @@ public class Main {
 	public static void main(String[] args) {
 		Scanner scan = new Scanner(System.in);
 		boolean running = true;
-		List<Mixer> mixers = new ArrayList<>();
 		Election election = null;
 
 		while (running) {
@@ -31,120 +32,187 @@ public class Main {
 			String[] words = line.split(" ");
 			int menu_item = Integer.parseInt(words[0]);
 			switch (menu_item) {
-			case 0: // exit
+			case 0: {// exit
 				running = false;
 				break;
-			case 1:
-				JsonObject election_json = FileManipulator.readJsonObjectFromFile(FileManipulator.ElectionFilename);
-				election = new Election(election_json);
-				System.out.println("Encryption key: " + Printer.bytesToHex(election.Y.getEncoded(true)));
+			}
+			case 1: {
+				GitManipulator.initialize();
 
-				if (words.length > 1)
-					try {
-						int n = Integer.parseInt(words[1]);
-						for (int i = 0; i < n; i++)
-							mixers.add(new Mixer(i + 1));
-						System.out.println(n + " mixers have been generated.");
-						break;
-					} catch (Exception e) {
-						System.out.println("Argument #mixers has to be a number");
-						break;
-					}
-				System.out.println("You need one more argument.");
 				break;
-			case 2:
-				if (election == null) {
-					System.out.println("You need to initialize frist.");
+			}
+			case 2: {
+				try {
+					JsonObject election_json = FileManipulator
+							.readJsonObjectFromFile(FileManipulator.getElectionFilename());
+					election = new Election(election_json);
+					System.out.println("Encryption key: " + Printer.bytesToHex(election.Y.getEncoded(true)));
+				} catch (Exception e) {
+					System.out.println("Couldn't read election file");
 					break;
 				}
 
-				System.out.println("Parallel mixing ballots " + mixers.size() + " times:");
+				int id = FileManipulator.getLastBallotMixingID();
 
-				int ballot_board_id = 0;
-				for (Mixer mixer : mixers) {
-					// read ballots from file
+				System.out.println("Parallel mixing ballots ...");
+
+				// read ballots from file
+				try {
 					List<Ballot> ballots = new ArrayList<>();
 					JsonArray ballots_json = FileManipulator
-							.readJsonArrayFromFile(FileManipulator.getBallotBoardFilename(ballot_board_id));
+							.readJsonArrayFromFile(FileManipulator.getBallotBoardFilename(id));
 					for (JsonElement item : ballots_json)
 						ballots.add(new Ballot(item.getAsJsonObject()));
+					// turn list into two dimension array (n X 3)
+					ElGamalTuple[][] board = ballots.stream()
+							.map(b -> new ElGamalTuple[] { b.color_enc, b.eID_enc, b.vote_enc })
+							.toArray(ElGamalTuple[][]::new);
 
-					ballot_board_id++;
-					ParallelMixerResult result = mixer.mixBallots(ballots, election.Y);
+					// mix
+					MixerResult result = Mixer.mix(board, election.Y);
 
+					// turn two dimension array back into list
+					List<Ballot> mixed_ballots = Arrays.stream(result.mixed_board)
+							.map(a -> new Ballot(a[0], a[1], a[2])).collect(Collectors.toList());
+
+					// write mixed board to file
 					JsonArray mixed_ballots_json = new JsonArray();
-					for (Ballot item : result.mixed_board)
+					for (Ballot item : mixed_ballots)
 						mixed_ballots_json.add(item.toJsonObject());
-					FileManipulator.writeToFile(FileManipulator.getBallotBoardFilename(ballot_board_id), mixed_ballots_json);
+					FileManipulator.writeToFile(FileManipulator.getBallotBoardFilename(id + 1), mixed_ballots_json);
 
-					FileManipulator.writeToFile(FileManipulator.getParallelProofFilename(ballot_board_id),
+					// write proof to file
+					FileManipulator.writeToFile(FileManipulator.getParallelProofFilename(id + 1),
 							result.proof_of_shuffle.toJsonObject());
+
+					System.out.println("Mixing finished");
+				} catch (Exception e) {
+					System.out.println("Couldn't read ballot board");
 				}
 
 				break;
-			case 3:
-				break;
-			case 4:
-				if (election == null) {
-					System.out.println("You need to initialize frist.");
+			}
+			case 3: {
+				try {
+					JsonObject election_json = FileManipulator
+							.readJsonObjectFromFile(FileManipulator.getElectionFilename());
+					election = new Election(election_json);
+					System.out.println("Encryption key: " + Printer.bytesToHex(election.Y.getEncoded(true)));
+				} catch (Exception e) {
+					System.out.println("Couldn't read election file");
 					break;
 				}
 
-				System.out.println("Mixing votes " + mixers.size() + " times:");
-				
-				int votes_board_id = 0;
-				for (Mixer mixer : mixers) {
-					// read ballots from file
+				int id = FileManipulator.getLastVoteMixingID();
+
+				System.out.println("Mixing votes ...");
+
+				// read ballots from file
+				try {
 					List<ElGamalTuple> votes = new ArrayList<>();
 					JsonArray votes_json = FileManipulator
-							.readJsonArrayFromFile(FileManipulator.getVoteBoardFilename(votes_board_id));
+							.readJsonArrayFromFile(FileManipulator.getVoteBoardFilename(id));
 					for (JsonElement item : votes_json)
 						votes.add(new ElGamalTuple(item.getAsJsonObject()));
+					// turn list into two dimension array (n X 1)
+					ElGamalTuple[][] board = votes.stream().map(et -> new ElGamalTuple[] { et })
+							.toArray(ElGamalTuple[][]::new);
 
-					votes_board_id++;
-					MixerResult result = mixer.mixVotes(votes, election.Y);
+					// mix
+					MixerResult result = Mixer.mix(board, election.Y);
 
+					// turn two dimension array back to list
+					List<ElGamalTuple> mixed_votes = Arrays.stream(result.mixed_board).map(a -> a[0])
+							.collect(Collectors.toList());
+
+					// write mixed board to file
 					JsonArray mixed_votes_json = new JsonArray();
-					for (ElGamalTuple item : result.mixed_board)
+					for (ElGamalTuple item : mixed_votes)
 						mixed_votes_json.add(item.toJsonObject());
-					FileManipulator.writeToFile(FileManipulator.getVoteBoardFilename(votes_board_id), mixed_votes_json);
+					FileManipulator.writeToFile(FileManipulator.getVoteBoardFilename(id + 1), mixed_votes_json);
 
-					FileManipulator.writeToFile(FileManipulator.getProofFilename(votes_board_id),
+					// write proof to file
+					FileManipulator.writeToFile(FileManipulator.getProofFilename(id + 1),
 							result.proof_of_shuffle.toJsonObject());
+
+					System.out.println("Mixing finished");
+				} catch (Exception e) {
+					System.out.println("Couldn't read ballot board");
 				}
 				break;
-			case 5:
-				break;
-			case 6:
+			}
+			case 4: {
 				if (election == null) {
 					System.out.println("You need to initialize frist.");
 					break;
 				}
-				for (int j = 0; j < mixers.size(); j++) {
-					List<Ballot> input_board = new ArrayList<>();
+				int n = FileManipulator.getLastBallotMixingID();
+				for (int i = 0; i < n; i++) {
+					List<Ballot> input_ballots = new ArrayList<>();
 					JsonArray ballots_json = FileManipulator
-							.readJsonArrayFromFile(FileManipulator.getBallotBoardFilename(j));
+							.readJsonArrayFromFile(FileManipulator.getBallotBoardFilename(i));
 					for (JsonElement item : ballots_json)
-						input_board.add(new Ballot(item.getAsJsonObject()));
+						input_ballots.add(new Ballot(item.getAsJsonObject()));
+					ElGamalTuple[][] input_board = input_ballots.stream()
+							.map(b -> new ElGamalTuple[] { b.color_enc, b.eID_enc, b.vote_enc })
+							.toArray(ElGamalTuple[][]::new);
 
-					List<Ballot> output_board = new ArrayList<>();
-					ballots_json = FileManipulator.readJsonArrayFromFile(FileManipulator.getBallotBoardFilename(j + 1));
+					List<Ballot> output_ballots = new ArrayList<>();
+					ballots_json = FileManipulator.readJsonArrayFromFile(FileManipulator.getBallotBoardFilename(i + 1));
 					for (JsonElement item : ballots_json)
-						output_board.add(new Ballot(item.getAsJsonObject()));
+						output_ballots.add(new Ballot(item.getAsJsonObject()));
+					ElGamalTuple[][] output_board = output_ballots.stream()
+							.map(b -> new ElGamalTuple[] { b.color_enc, b.eID_enc, b.vote_enc })
+							.toArray(ElGamalTuple[][]::new);
 
 					JsonObject proof_json = FileManipulator
-							.readJsonObjectFromFile(FileManipulator.getParallelProofFilename(j + 1));
-					ParallelProofOfShuffle proof = new ParallelProofOfShuffle(proof_json);
+							.readJsonObjectFromFile(FileManipulator.getParallelProofFilename(i + 1));
+					ProofOfShuffle proof = new ProofOfShuffle(proof_json);
 
 					System.out.println(
-							"Proof " + (j + 1) + " check " + proof.check(input_board, output_board, election.Y));
+							"Proof " + (i + 1) + " check " + proof.check(input_board, output_board, election.Y));
 				}
 				break;
-			case 7:
+			}
+			case 5: {
+				if (election == null) {
+					System.out.println("You need to initialize frist.");
+					break;
+				}
+				int n = FileManipulator.getLastVoteMixingID();
+				for (int i = 0; i < n; i++) {
+					List<ElGamalTuple> input_votes = new ArrayList<>();
+					JsonArray votes_json = FileManipulator
+							.readJsonArrayFromFile(FileManipulator.getVoteBoardFilename(i));
+					for (JsonElement item : votes_json)
+						input_votes.add(new ElGamalTuple(item.getAsJsonObject()));
+					ElGamalTuple[][] input_board = input_votes.stream().map(b -> new ElGamalTuple[] { b })
+							.toArray(ElGamalTuple[][]::new);
+
+					List<ElGamalTuple> output_votes = new ArrayList<>();
+					votes_json = FileManipulator.readJsonArrayFromFile(FileManipulator.getVoteBoardFilename(i + 1));
+					for (JsonElement item : votes_json)
+						output_votes.add(new ElGamalTuple(item.getAsJsonObject()));
+					ElGamalTuple[][] output_board = output_votes.stream().map(b -> new ElGamalTuple[] { b })
+							.toArray(ElGamalTuple[][]::new);
+
+					JsonObject proof_json = FileManipulator
+							.readJsonObjectFromFile(FileManipulator.getProofFilename(i + 1));
+					ProofOfShuffle proof = new ProofOfShuffle(proof_json);
+
+					System.out.println(
+							"Proof " + (i + 1) + " check " + proof.check(input_board, output_board, election.Y));
+				}
 				break;
-			default:
+			}
+			case 6: {
+				GitManipulator.pushGitRepo();
+				break;
+			}
+			default: {
 				System.out.println("You need to specify one of the options.");
 				break;
+			}
 			}
 		}
 		scan.close();
@@ -154,13 +222,12 @@ public class Main {
 		int i = 0;
 		System.out.println();
 		System.out.println("To exit                        press  " + i++); // 0
-		System.out.println("To initialize                  press  " + i++ + " #mixers"); // 1
-		System.out.println("To automatically mix ballots   press  " + i++); // 2
-		System.out.println("To manually mix ballots        press  " + i++ + " inputfile"); // 3
-		System.out.println("To automatically mix enc votes press  " + i++); // 4
-		System.out.println("To manually mix enc votes      press  " + i++ + " inputfile"); // 5
-		System.out.println("To check parallel proofs       press  " + i++); // 6
-		System.out.println("To check proof                 press  " + i++); // 7
+		System.out.println("To pull git repo               press  " + i++); // 1
+		System.out.println("To mix ballots                 press  " + i++); // 2
+		System.out.println("To mix encrypted votes         press  " + i++); // 3
+		System.out.println("To check parallel proofs       press  " + i++); // 4
+		System.out.println("To check proof                 press  " + i++); // 5
+		System.out.println("To push git repo               press  " + i++); // 6
 	}
 
 }
