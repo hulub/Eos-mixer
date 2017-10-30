@@ -4,8 +4,8 @@ import java.io.File;
 import java.io.IOException;
 
 public class GitManipulator {
-	private static final String username = "hulub";
-	private static final String password = "vreau3Copii";
+	private static final String username = "";
+	private static final String password = "";
 	private static final String repository_path = "github.com/hulub/eos.git";
 
 	public static void initialize() {
